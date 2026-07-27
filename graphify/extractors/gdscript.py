@@ -280,11 +280,20 @@ def extract_gdscript(path: Path) -> dict:
         is rewritten into the referrer's namespace and stops matching the node
         the target's own extraction produces - one node per referrer instead of
         one shared node (back_button.tscn had five).
+
+        Such a stub is marked ``_stub``. Attributing it to the target means its
+        source_file alone no longer distinguishes "parsed out of this file" from
+        "merely names this file", and build_merge's replace rule reads exactly
+        that to decide a file was re-extracted. Unmarked, one changed referrer
+        deletes every symbol of the file it points at.
         """
         if nid not in defined:
-            nodes.append({"id": nid, "label": label, "file_type": "code",
-                          "source_file": source_file or str(path),
-                          "source_location": source_location})
+            node = {"id": nid, "label": label, "file_type": "code",
+                    "source_file": source_file or str(path),
+                    "source_location": source_location}
+            if source_file is not None and source_file != str(path):
+                node["_stub"] = True
+            nodes.append(node)
             defined.add(nid)
 
     def add_edge(src: str, tgt: str, relation: str, location: str | None = None,

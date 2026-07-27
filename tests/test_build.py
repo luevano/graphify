@@ -1200,3 +1200,65 @@ def test_build_from_json_prunes_dangling_hyperedge_members(capsys):
     assert set(hes) == {"he_partial"}, "an all-dangling hyperedge must be dropped"
     assert hes["he_partial"]["nodes"] == ["alpha", "beta"]
     assert "he_all_ghost" in capsys.readouterr().err
+
+
+def _stub_merge_graph(tmp_path, mark_stub):
+    """Base graph holding a script's symbols, merged with a chunk for a CHANGED
+    referrer (project.godot) that only names that script."""
+    base = {
+        "directed": False, "multigraph": False, "graph": {},
+        "nodes": [
+            {"id": "autoloads_thing", "label": "thing.gd", "file_type": "code",
+             "source_file": "autoloads/thing.gd", "_origin": "ast"},
+            {"id": "autoloads_thing_ready", "label": "_ready()", "file_type": "code",
+             "source_file": "autoloads/thing.gd", "_origin": "ast"},
+            {"id": "autoloads_thing_tick", "label": "tick()", "file_type": "code",
+             "source_file": "autoloads/thing.gd", "_origin": "ast"},
+        ],
+        "links": [{"source": "autoloads_thing", "target": "autoloads_thing_ready",
+                   "relation": "defines", "weight": 1.0}],
+    }
+    graph_path = tmp_path / "graph.json"
+    graph_path.write_text(json.dumps(base), encoding="utf-8")
+
+    stub = {"id": "autoloads_thing", "label": "thing.gd", "file_type": "code",
+            "source_file": "autoloads/thing.gd", "source_location": None}
+    if mark_stub:
+        stub["_stub"] = True
+    chunk = {
+        "nodes": [
+            {"id": "project_godot", "label": "project.godot", "file_type": "code",
+             "source_file": "project.godot", "source_location": None},
+            stub,
+        ],
+        "edges": [{"source": "project_godot", "target": "autoloads_thing",
+                   "relation": "autoload", "confidence": "EXTRACTED",
+                   "source_file": "project.godot", "weight": 1.0}],
+    }
+    return build_merge([chunk], graph_path=str(graph_path), root=str(tmp_path))
+
+
+def test_merge_stub_does_not_evict_the_file_it_names(tmp_path):
+    """A referenced-but-not-re-extracted file keeps its symbols (#stub-replace).
+
+    Godot's .tscn/.tres/project.godot attribute their cross-file placeholders to
+    the file they stand for, so source_file alone cannot distinguish "parsed out
+    of" from "merely names". Reading a stub as re-extraction deleted every symbol
+    of every autoload registered in project.godot.
+    """
+    G = _stub_merge_graph(tmp_path, mark_stub=True)
+    kept = {n for n, d in G.nodes(data=True)
+            if d.get("source_file") == "autoloads/thing.gd"}
+    assert kept == {"autoloads_thing", "autoloads_thing_ready", "autoloads_thing_tick"}
+    assert G.has_node("project_godot")
+    # The transient marker must never reach graph.json.
+    assert "_stub" not in G.nodes["autoloads_thing"]
+
+
+def test_merge_non_stub_still_replaces_its_source(tmp_path):
+    """The replace rule itself is intact: a genuinely re-extracted file still
+    drops the symbols that disappeared from it, so #1344 does not regress."""
+    G = _stub_merge_graph(tmp_path, mark_stub=False)
+    kept = {n for n, d in G.nodes(data=True)
+            if d.get("source_file") == "autoloads/thing.gd"}
+    assert kept == {"autoloads_thing"}

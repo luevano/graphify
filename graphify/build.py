@@ -693,6 +693,11 @@ def build_from_json(extraction: dict, *, directed: bool = False, root: str | Pat
                 continue
             if "source_file" in node:
                 node["source_file"] = _norm_source_file(node["source_file"], _root)
+            # `_stub` is a transient extractor hint, read only by build_merge's
+            # replace rule above. Same shape as the `target_file` edge hint: it
+            # must not persist into graph.json, or a re-serialized base node
+            # would carry a stale marker through later merges.
+            node.pop("_stub", None)
         G.add_node(node["id"], **{k: v for k, v in node.items() if k != "id"})
     node_set = set(G.nodes())
 
@@ -1308,10 +1313,24 @@ def build_merge(
     # for them; genuinely deleted files are still handled via prune_sources.
     # Matched in both raw and _norm_source_file form because new_chunks may carry
     # absolute win32 paths while the stored graph keeps relative posix (#1007).
+    #
+    # A ``_stub`` node does NOT count as evidence its source_file was
+    # re-extracted. Some extractors emit a placeholder for a file they only
+    # *reference* and attribute it to that file (Godot's .tscn/.tres/
+    # project.godot name their scripts; see extractors/godot_resource.py), so
+    # source_file alone cannot tell "parsed out of" from "merely names". Reading
+    # it as re-extraction deletes an untouched file's real symbols and leaves the
+    # one-line stub: editing project.godot + one .tscn dropped 429 of 1204 nodes
+    # on a Godot project, every autoload collapsing to a single node. This
+    # mirrors watch.py's incremental rebuild, which has always evicted by
+    # ``extract_targets`` (the files it actually parsed) rather than by node
+    # attribution, and is why the hook/watcher path never showed the bug.
     _replace_root = _eff_root
     new_sources: set[str] = set()
     for ch in new_chunks:
         for n in ch.get("nodes", []):
+            if n.get("_stub"):
+                continue
             sf = n.get("source_file")
             if not sf:
                 continue

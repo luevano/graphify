@@ -257,11 +257,20 @@ def _build_scene(path: Path, blocks: list[_Block]) -> dict:
         to that file - extract()'s post-passes namespace ids by source_file, so a
         stub attributed to the referrer never converges on the node the target's
         own extraction creates.
+
+        Such a stub is marked ``_stub``. Attributing it to the target means its
+        source_file alone no longer distinguishes "parsed out of this file" from
+        "merely names this file", and build_merge's replace rule reads exactly
+        that to decide a file was re-extracted. Unmarked, editing project.godot
+        deletes every symbol of every autoload it registers.
         """
         if nid not in defined:
-            nodes.append({"id": nid, "label": label, "file_type": "code",
-                          "source_file": source_file or str(path),
-                          "source_location": loc})
+            node = {"id": nid, "label": label, "file_type": "code",
+                    "source_file": source_file or str(path),
+                    "source_location": loc}
+            if source_file is not None and source_file != str(path):
+                node["_stub"] = True
+            nodes.append(node)
             defined.add(nid)
 
     def add_edge(src: str, tgt: str, relation: str, loc: str | None = None,
@@ -377,11 +386,20 @@ def _build_project(path: Path, blocks: list[_Block]) -> dict:
         to that file - extract()'s post-passes namespace ids by source_file, so a
         stub attributed to the referrer never converges on the node the target's
         own extraction creates.
+
+        Such a stub is marked ``_stub``. Attributing it to the target means its
+        source_file alone no longer distinguishes "parsed out of this file" from
+        "merely names this file", and build_merge's replace rule reads exactly
+        that to decide a file was re-extracted. Unmarked, editing project.godot
+        deletes every symbol of every autoload it registers.
         """
         if nid not in defined:
-            nodes.append({"id": nid, "label": label, "file_type": "code",
-                          "source_file": source_file or str(path),
-                          "source_location": loc})
+            node = {"id": nid, "label": label, "file_type": "code",
+                    "source_file": source_file or str(path),
+                    "source_location": loc}
+            if source_file is not None and source_file != str(path):
+                node["_stub"] = True
+            nodes.append(node)
             defined.add(nid)
 
     def add_edge(src: str, tgt: str, relation: str, loc: str | None = None,

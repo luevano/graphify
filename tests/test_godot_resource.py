@@ -72,6 +72,48 @@ class TestGodotFileIdentity(unittest.TestCase):
                 self.assertIn(e["target"], node_ids,
                               f"{rel} edge target {e['target']} matches no node")
 
+    def test_same_stem_scene_and_script_do_not_dangle(self):
+        """`back_button.tscn` + `back_button.gd` is the Godot norm, not an edge case.
+
+        Both collapse to one canonical id (the stem drops the extension), so the
+        collision pass salts them apart by path. A cross-file `instances` edge
+        from a THIRD scene carries neither salt, so it dangled on the now-dead
+        un-salted id - the same failure #1475 fixed for foo.h/foo.c.
+        """
+        (self.root / "ui").mkdir()
+        (self.root / "project.godot").write_text(
+            'config_version=5\n\n[application]\nrun/main_scene="res://ui/widget.tscn"\n'
+        )
+        (self.root / "ui" / "widget.gd").write_text("extends Node\nfunc ping():\n\tpass\n")
+        (self.root / "ui" / "widget.tscn").write_text(
+            '[gd_scene load_steps=2 format=3]\n\n'
+            '[ext_resource type="Script" path="res://ui/widget.gd" id="1_w"]\n\n'
+            '[node name="Widget" type="Node"]\n'
+            'script = ExtResource("1_w")\n'
+        )
+        (self.root / "ui" / "host.tscn").write_text(
+            '[gd_scene load_steps=2 format=3]\n\n'
+            '[ext_resource type="PackedScene" path="res://ui/widget.tscn" id="1_x"]\n\n'
+            '[node name="Host" type="Node"]\n'
+        )
+        files = [self.root / "project.godot", self.root / "ui" / "widget.gd",
+                 self.root / "ui" / "widget.tscn", self.root / "ui" / "host.tscn"]
+        r = extract(files, cache_root=self.root)
+
+        node_ids = {n["id"] for n in r["nodes"]}
+        dangling = sorted({
+            (e["relation"], endpoint)
+            for e in r["edges"]
+            for endpoint in (e["source"], e["target"])
+            if endpoint not in node_ids
+        })
+        self.assertEqual(dangling, [], f"dangling edges after collision salt: {dangling}")
+
+        # the scene and the script must still be DISTINCT nodes
+        self.assertEqual(len(self._ids_for(r, "widget.gd")), 1)
+        self.assertEqual(len(self._ids_for(r, "widget.tscn")), 1)
+        self.assertNotEqual(self._ids_for(r, "widget.gd"), self._ids_for(r, "widget.tscn"))
+
     def test_cross_file_stub_is_attributed_to_the_target_file(self):
         (self.root / "project.godot").write_text("config_version=5\n")
         (self.root / "child.gd").write_text("extends Node\n")

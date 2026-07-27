@@ -652,6 +652,20 @@ def _node_disambiguation_source_key(node: dict, root: Path) -> str:
         return _source_key(source_file, root)
     return _source_key(str(node.get("origin_file", "")), root)
 
+# Relations whose target is a resolved FILE the emitter named via `target_file`.
+# Keying the target salt by that file (instead of by the importer's own path) is
+# what lets a cross-file edge land on the right sibling when two same-stem files
+# collapse to one id. The imports family generalized the #1475 C/ObjC foo.h/foo.c
+# carve-out; Godot needs the same treatment because a scene and its attached
+# script are conventionally named alike (back_button.tscn + back_button.gd), so
+# the collision is the norm there rather than an edge case.
+_TARGET_FILE_RELATIONS = (
+    "imports", "imports_from", "re_exports",
+    "instances", "attaches_script", "uses_resource", "script", "main_scene",
+    "extends",
+)
+
+
 def _disambiguate_colliding_node_ids(
     nodes: list[dict],
     edges: list[dict],
@@ -763,7 +777,7 @@ def _disambiguate_colliding_node_ids(
         # every language and to re_exports. `pop` it as we consume it: this is the
         # hint's only reader, and its absolute path must not persist into graph.json.
         target_file = edge.pop("target_file", None)
-        if target_file and edge.get("relation") in ("imports", "imports_from", "re_exports"):
+        if target_file and edge.get("relation") in _TARGET_FILE_RELATIONS:
             target_edge_key = _source_key(str(target_file), root)
         else:
             target_edge_key = edge_source_key

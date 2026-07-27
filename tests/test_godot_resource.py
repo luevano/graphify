@@ -3,8 +3,8 @@ import textwrap
 import unittest
 from pathlib import Path
 
-from graphify.extract import extract_godot_scene, _make_id, _file_stem
-from graphify.extractors import godot_scene as gs
+from graphify.extract import extract_godot_resource, _make_id, _file_stem
+from graphify.extractors import godot_resource as gs
 
 
 def _edges(result, relation):
@@ -21,7 +21,7 @@ def _norm(result):
     return n, e
 
 
-class TestGodotScene(unittest.TestCase):
+class TestGodotResource(unittest.TestCase):
     """The .tscn/.tres/project.godot extractor (grammar path when available)."""
 
     def setUp(self):
@@ -60,10 +60,10 @@ class TestGodotScene(unittest.TestCase):
 
             [connection signal="body_entered" from="Hitbox" to="." method="take_damage"]
         """)
-        r = extract_godot_scene(p)
+        r = extract_godot_resource(p)
 
-        enemy_gd = _make_id(str((self.root / "scripts" / "enemy.gd").resolve()))
-        bullet = _make_id(str((self.root / "scenes" / "Bullet.tscn").resolve()))
+        enemy_gd = _make_id(str(self.root / "scripts" / "enemy.gd"))
+        bullet = _make_id(str(self.root / "scenes" / "Bullet.tscn"))
 
         attaches = {e["target"] for e in _edges(r, "attaches_script")}
         self.assertIn(enemy_gd, attaches)
@@ -73,7 +73,7 @@ class TestGodotScene(unittest.TestCase):
 
         # the connection method resolves to the ROOT script's function node id,
         # i.e. the same id the gdscript extractor emits for take_damage()
-        stem = _file_stem((self.root / "scripts" / "enemy.gd").resolve())
+        stem = _file_stem(self.root / "scripts" / "enemy.gd")
         take_damage_nid = _make_id(stem, "take_damage")
         conn_targets = {e["target"] for e in _edges(r, "connects")}
         self.assertIn(take_damage_nid, conn_targets)
@@ -88,12 +88,12 @@ class TestGodotScene(unittest.TestCase):
             [autoload]
             GameState="*res://scripts/game_state.gd"
         """)
-        r = extract_godot_scene(p)
+        r = extract_godot_resource(p)
 
         self.assertTrue(_edges(r, "autoload"), "no autoload edge emitted")
         self.assertTrue(_edges(r, "main_scene"), "no main_scene edge emitted")
 
-        gstate = _make_id(str((self.root / "scripts" / "game_state.gd").resolve()))
+        gstate = _make_id(str(self.root / "scripts" / "game_state.gd"))
         script_targets = {e["target"] for e in _edges(r, "script")}
         self.assertIn(gstate, script_targets)
 
@@ -111,11 +111,11 @@ class TestGodotScene(unittest.TestCase):
 
             [connection signal="body_entered" from="Enemy" to="." method="take_damage"]
         """)
-        default = extract_godot_scene(scene)
+        default = extract_godot_resource(scene)
         saved = gs._RESOURCE_PARSER
         try:
             gs._RESOURCE_PARSER = None          # disable grammar -> line parser
-            forced_lines = extract_godot_scene(scene)
+            forced_lines = extract_godot_resource(scene)
         finally:
             gs._RESOURCE_PARSER = saved
         # The line fallback must be at least as capable as the default path here.
@@ -124,7 +124,7 @@ class TestGodotScene(unittest.TestCase):
 
 @unittest.skipUnless(gs._load_resource_parser() is not None,
                      "godot_resource grammar (tree-sitter-language-pack) not installed")
-class TestGodotSceneGrammar(unittest.TestCase):
+class TestGodotResourceGrammar(unittest.TestCase):
     """Behaviour specific to the grammar front end."""
 
     def setUp(self):
@@ -168,8 +168,8 @@ class TestGodotSceneGrammar(unittest.TestCase):
             [node name="Odd]Name" type="Node2D"]
             script = ExtResource("1_e")
         """)
-        r = extract_godot_scene(scene)
-        enemy_gd = _make_id(str((self.root / "scripts" / "enemy.gd").resolve()))
+        r = extract_godot_resource(scene)
+        enemy_gd = _make_id(str(self.root / "scripts" / "enemy.gd"))
         attaches = {e["target"] for e in _edges(r, "attaches_script")}
         self.assertIn(enemy_gd, attaches)
 

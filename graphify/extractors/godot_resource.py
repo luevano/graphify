@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import re
 
+from os.path import normpath
 from pathlib import Path
 
 from graphify.extractors.base import _file_stem, _make_id
@@ -68,13 +69,18 @@ def _project_root(path: Path) -> Path:
 
 
 def _resolve_res(res_path: str, root: Path) -> Path | None:
+    """Resolve ``res://`` against the project root, staying scan-relative.
+
+    ``root`` comes from ``_project_root(path)`` and is therefore expressed in
+    the same terms as the path the walker passed in. Absolutizing here would
+    leak the on-disk location into every id built from the result (ext_resource
+    targets, attached-script stems), and extract()'s #502 remap cannot repair a
+    cross-file target. The result is only ever used to build ids and labels -
+    never for filesystem access - so a relative path is sufficient.
+    """
     if not res_path.startswith("res://"):
         return None
-    candidate = root / res_path[len("res://"):]
-    try:
-        return candidate.resolve()
-    except Exception:
-        return candidate
+    return Path(normpath(root / res_path[len("res://"):]))
 
 
 def _parse_attrs(attr_str: str) -> dict:
@@ -222,7 +228,7 @@ def _blocks(text: str) -> list[_Block]:
 # Shared edge builders
 # ---------------------------------------------------------------------------
 
-def extract_godot_scene(path: Path) -> dict:
+def extract_godot_resource(path: Path) -> dict:
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:

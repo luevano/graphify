@@ -271,19 +271,35 @@ def extract_gdscript(path: Path) -> dict:
     edges: list[dict] = []
     defined: set[str] = {file_nid}
 
-    def add_node(nid: str, label: str, source_location: str | None = None) -> None:
+    def add_node(nid: str, label: str, source_location: str | None = None,
+                 source_file: str | None = None) -> None:
+        """``source_file`` names the file the node BELONGS to, not the file that
+        mentioned it. A stub standing in for another file (a preload/extends
+        target) must be attributed to that file: extract()'s post-passes
+        namespace node ids by source_file, so a stub attributed to the referrer
+        is rewritten into the referrer's namespace and stops matching the node
+        the target's own extraction produces - one node per referrer instead of
+        one shared node (back_button.tscn had five).
+        """
         if nid not in defined:
             nodes.append({"id": nid, "label": label, "file_type": "code",
-                          "source_file": str(path), "source_location": source_location})
+                          "source_file": source_file or str(path),
+                          "source_location": source_location})
             defined.add(nid)
 
     def add_edge(src: str, tgt: str, relation: str, location: str | None = None,
-                 context: str | None = None) -> None:
+                 context: str | None = None, target_file: str | None = None) -> None:
+        """``target_file`` is the cross-file resolution hint extract() consumes
+        (#2169) to canonicalize an edge endpoint onto the real target node.
+        Without it a cross-file target keeps its raw per-file id.
+        """
         edge = {"source": src, "target": tgt, "relation": relation,
                 "confidence": "EXTRACTED", "confidence_score": 1.0,
                 "source_file": str(path), "source_location": location, "weight": 1.0}
         if context:
             edge["context"] = context
+        if target_file:
+            edge["target_file"] = target_file
         edges.append(edge)
 
     if parser is None:
@@ -336,11 +352,12 @@ def extract_gdscript(path: Path) -> dict:
             # scripts are CharacterBody3D vs Control" is real structure.
             if res is not None:
                 tgt = _make_id(str(res))
-                add_node(tgt, res.name)
+                add_node(tgt, res.name, source_file=str(res))
+                add_edge(owner_nid, tgt, "extends", _loc(ext), target_file=str(res))
             else:
                 tgt = _make_id(base_txt)
                 add_node(tgt, base_txt)
-            add_edge(owner_nid, tgt, "extends", _loc(ext))
+                add_edge(owner_nid, tgt, "extends", _loc(ext))
 
     # ---- signals (script level) ---------------------------------------------
     for sig in [c for c in root.children if c.is_named and c.type == "signal_statement"]:
@@ -370,8 +387,9 @@ def extract_gdscript(path: Path) -> dict:
                     res = _resolve_res(_strip_quotes(_txt(a, raw)), path)
                     if res is not None:
                         tgt = _make_id(str(res))
-                        add_node(tgt, res.name)
-                        add_edge(file_nid, tgt, "imports", _loc(call_node), context="preload")
+                        add_node(tgt, res.name, source_file=str(res))
+                        add_edge(file_nid, tgt, "imports", _loc(call_node),
+                                 context="preload", target_file=str(res))
                     break
             return
         if callee == "emit_signal" and args is not None:
@@ -449,7 +467,8 @@ def extract_gdscript(path: Path) -> dict:
         # autoload's script (its id matches _make_id(_file_stem(script), method)).
         if is_direct and recv in autoloads:
             tgt = _make_id(_file_stem(autoloads[recv]), method)
-            add_edge(func_nid, tgt, "calls", _loc(attr_node), context=recv)
+            add_edge(func_nid, tgt, "calls", _loc(attr_node), context=recv,
+                     target_file=str(autoloads[recv]))
             return
         tgt = _make_id(method)
         add_node(tgt, method + "()")

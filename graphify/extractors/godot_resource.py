@@ -250,24 +250,38 @@ def _build_scene(path: Path, blocks: list[_Block]) -> dict:
     edges: list[dict] = []
     defined: set[str] = {file_nid}
 
-    def add_node(nid: str, label: str, loc: str | None = None) -> None:
+    def add_node(nid: str, label: str, loc: str | None = None,
+                 source_file: str | None = None) -> None:
+        """``source_file`` names the file the node BELONGS to. A stub standing in
+        for another file (an ext_resource, an attached script) must be attributed
+        to that file - extract()'s post-passes namespace ids by source_file, so a
+        stub attributed to the referrer never converges on the node the target's
+        own extraction creates.
+        """
         if nid not in defined:
             nodes.append({"id": nid, "label": label, "file_type": "code",
-                          "source_file": str(path), "source_location": loc})
+                          "source_file": source_file or str(path),
+                          "source_location": loc})
             defined.add(nid)
 
     def add_edge(src: str, tgt: str, relation: str, loc: str | None = None,
-                 context: str | None = None) -> None:
+                 context: str | None = None, target_file: str | None = None) -> None:
+        """``target_file`` is the cross-file resolution hint extract() consumes
+        (#2169) to canonicalize an edge endpoint onto the real target node."""
         e = {"source": src, "target": tgt, "relation": relation,
              "confidence": "EXTRACTED", "confidence_score": 1.0,
              "source_file": str(path), "source_location": loc, "weight": 1.0}
         if context:
             e["context"] = context
+        if target_file:
+            e["target_file"] = target_file
         edges.append(e)
 
     ext_resources: dict[str, dict] = {}   # id -> {type, path, resolved}
     root_script_stem: str | None = None   # stem of the script on the "." node
+    root_script_path: Path | None = None  # ...and its path, for the target_file hint
     node_scripts: dict[str, str] = {}     # node path -> script stem
+    node_script_paths: dict[str, Path] = {}   # node path -> script path
 
     for block in blocks:
         kind = block.kind
@@ -281,13 +295,14 @@ def _build_scene(path: Path, blocks: list[_Block]) -> dict:
             ext_resources[rid] = {"type": rtype, "path": rpath, "resolved": resolved}
             if resolved is not None:
                 tgt = _make_id(str(resolved))
-                add_node(tgt, resolved.name)
+                add_node(tgt, resolved.name, source_file=str(resolved))
                 if rpath.endswith(".gd") or rtype == "Script":
-                    add_edge(file_nid, tgt, "attaches_script", loc)
+                    add_edge(file_nid, tgt, "attaches_script", loc, target_file=str(resolved))
                 elif rpath.endswith(".tscn") or rtype == "PackedScene":
-                    add_edge(file_nid, tgt, "instances", loc)
+                    add_edge(file_nid, tgt, "instances", loc, target_file=str(resolved))
                 else:
-                    add_edge(file_nid, tgt, "uses_resource", loc, context=rtype or None)
+                    add_edge(file_nid, tgt, "uses_resource", loc, context=rtype or None,
+                             target_file=str(resolved))
 
         elif kind == "node":
             name = block.attrs.get("name", "")
@@ -309,13 +324,15 @@ def _build_scene(path: Path, blocks: list[_Block]) -> dict:
                 if info and info.get("resolved") is not None:
                     resolved = info["resolved"]
                     tgt = _make_id(str(resolved))
-                    add_node(tgt, resolved.name)
+                    add_node(tgt, resolved.name, source_file=str(resolved))
                     add_edge(file_nid, tgt, "attaches_script", ploc,
-                             context=node_path)
+                             context=node_path, target_file=str(resolved))
                     stem = _file_stem(resolved)
                     node_scripts[node_path] = stem
+                    node_script_paths[node_path] = resolved
                     if node_path == ".":
                         root_script_stem = stem
+                        root_script_path = resolved
 
         elif kind == "connection":
             sig = block.attrs.get("signal", "")
@@ -324,15 +341,21 @@ def _build_scene(path: Path, blocks: list[_Block]) -> dict:
             method = block.attrs.get("method", "")
             if method:
                 tgt_stem = node_scripts.get(to)
+                tgt_path = node_script_paths.get(to)
                 if tgt_stem is None and to == ".":
                     tgt_stem = root_script_stem
+                    tgt_path = root_script_path
                 if tgt_stem is not None:
+                    # signal handler lives in the attached script, not here
                     tgt = _make_id(tgt_stem, method)
+                    add_edge(file_nid, tgt, "connects", loc,
+                             context=f"{sig} from {frm}",
+                             target_file=str(tgt_path) if tgt_path else None)
                 else:
                     tgt = _make_id(method)
                     add_node(tgt, method + "()")
-                add_edge(file_nid, tgt, "connects", loc,
-                         context=f"{sig} from {frm}")
+                    add_edge(file_nid, tgt, "connects", loc,
+                             context=f"{sig} from {frm}")
 
     return {"nodes": nodes, "edges": edges}
 
@@ -347,19 +370,31 @@ def _build_project(path: Path, blocks: list[_Block]) -> dict:
     edges: list[dict] = []
     defined: set[str] = {file_nid}
 
-    def add_node(nid: str, label: str, loc: str | None = None) -> None:
+    def add_node(nid: str, label: str, loc: str | None = None,
+                 source_file: str | None = None) -> None:
+        """``source_file`` names the file the node BELONGS to. A stub standing in
+        for another file (an ext_resource, an attached script) must be attributed
+        to that file - extract()'s post-passes namespace ids by source_file, so a
+        stub attributed to the referrer never converges on the node the target's
+        own extraction creates.
+        """
         if nid not in defined:
             nodes.append({"id": nid, "label": label, "file_type": "code",
-                          "source_file": str(path), "source_location": loc})
+                          "source_file": source_file or str(path),
+                          "source_location": loc})
             defined.add(nid)
 
     def add_edge(src: str, tgt: str, relation: str, loc: str | None = None,
-                 context: str | None = None) -> None:
+                 context: str | None = None, target_file: str | None = None) -> None:
+        """``target_file`` is the cross-file resolution hint extract() consumes
+        (#2169) to canonicalize an edge endpoint onto the real target node."""
         e = {"source": src, "target": tgt, "relation": relation,
              "confidence": "EXTRACTED", "confidence_score": 1.0,
              "source_file": str(path), "source_location": loc, "weight": 1.0}
         if context:
             e["context"] = context
+        if target_file:
+            e["target_file"] = target_file
         edges.append(e)
 
     for block in blocks:
@@ -374,13 +409,13 @@ def _build_project(path: Path, blocks: list[_Block]) -> dict:
                 add_edge(file_nid, gid, "autoload", loc)
                 if resolved is not None:
                     tgt = _make_id(str(resolved))
-                    add_node(tgt, resolved.name)
-                    add_edge(gid, tgt, "script", loc)
+                    add_node(tgt, resolved.name, source_file=str(resolved))
+                    add_edge(gid, tgt, "script", loc, target_file=str(resolved))
             elif key == "run/main_scene":
                 resolved = _resolve_res(val.strip().strip('"'), root)
                 if resolved is not None:
                     tgt = _make_id(str(resolved))
-                    add_node(tgt, resolved.name)
-                    add_edge(file_nid, tgt, "main_scene", loc)
+                    add_node(tgt, resolved.name, source_file=str(resolved))
+                    add_edge(file_nid, tgt, "main_scene", loc, target_file=str(resolved))
 
     return {"nodes": nodes, "edges": edges}

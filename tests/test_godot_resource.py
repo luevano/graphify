@@ -3,7 +3,7 @@ import textwrap
 import unittest
 from pathlib import Path
 
-from graphify.extract import extract_godot_resource, _make_id, _file_stem
+from graphify.extract import extract, extract_godot_resource, _make_id, _file_stem
 from graphify.extractors import godot_resource as gs
 
 
@@ -19,6 +19,78 @@ def _norm(result):
                 x.get("context") or "", x.get("source_location") or "")
                for x in result["edges"])
     return n, e
+
+
+class TestGodotFileIdentity(unittest.TestCase):
+    """One file must be ONE node, however many other files reference it.
+
+    Cross-file stubs used to be attributed to the referrer, and extract()'s
+    post-passes namespace node ids by source_file - so a script referenced from
+    project.godot and from three scenes became four disconnected nodes instead
+    of one hub. These assertions run through extract(), not the raw extractor,
+    because the split only happens in those post-passes.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _ids_for(self, result, basename):
+        return {n["id"] for n in result["nodes"] if n.get("label") == basename}
+
+    def test_script_referenced_from_project_and_scenes_is_one_node(self):
+        (self.root / "scripts").mkdir()
+        (self.root / "scenes").mkdir()
+        (self.root / "project.godot").write_text(
+            'config_version=5\n\n[application]\nrun/main_scene="res://scenes/main.tscn"\n'
+            '\n[autoload]\nShared="*res://scripts/shared.gd"\n'
+        )
+        (self.root / "scripts" / "shared.gd").write_text(
+            "extends Node\nfunc ping():\n\tpass\n"
+        )
+        for scene in ("main.tscn", "other.tscn"):
+            (self.root / "scenes" / scene).write_text(
+                '[gd_scene load_steps=2 format=3]\n\n'
+                '[ext_resource type="Script" path="res://scripts/shared.gd" id="1_s"]\n\n'
+                '[node name="Root" type="Node"]\n'
+                'script = ExtResource("1_s")\n'
+            )
+        files = [self.root / "project.godot", self.root / "scripts" / "shared.gd",
+                 self.root / "scenes" / "main.tscn", self.root / "scenes" / "other.tscn"]
+        r = extract(files, cache_root=self.root)
+
+        ids = self._ids_for(r, "shared.gd")
+        self.assertEqual(len(ids), 1, f"shared.gd split into {len(ids)} nodes: {sorted(ids)}")
+
+        # every cross-file edge must land on that one node
+        node_ids = {n["id"] for n in r["nodes"]}
+        for rel in ("attaches_script", "script", "instances", "main_scene"):
+            for e in _edges(r, rel):
+                self.assertIn(e["target"], node_ids,
+                              f"{rel} edge target {e['target']} matches no node")
+
+    def test_cross_file_stub_is_attributed_to_the_target_file(self):
+        (self.root / "project.godot").write_text("config_version=5\n")
+        (self.root / "child.gd").write_text("extends Node\n")
+        (self.root / "parent.tscn").write_text(
+            '[gd_scene load_steps=2 format=3]\n\n'
+            '[ext_resource type="Script" path="res://child.gd" id="1_c"]\n\n'
+            '[node name="Root" type="Node"]\n'
+            'script = ExtResource("1_c")\n'
+        )
+        r = extract_godot_resource(self.root / "parent.tscn")
+        stub = [n for n in r["nodes"] if n["label"] == "child.gd"]
+        self.assertTrue(stub, "no stub node emitted for the referenced script")
+        self.assertTrue(
+            stub[0]["source_file"].endswith("child.gd"),
+            f"stub attributed to the referrer, not the target: {stub[0]['source_file']}",
+        )
+        # and the edge carries the resolution hint extract() needs
+        attach = _edges(r, "attaches_script")
+        self.assertTrue(attach[0].get("target_file", "").endswith("child.gd"))
 
 
 class TestGodotResource(unittest.TestCase):

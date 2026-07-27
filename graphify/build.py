@@ -504,6 +504,115 @@ def graph_has_legacy_ids(nodes: list, root: str | Path | None = None, sample: in
     return False
 
 
+def _file_stem_index(nodes: list) -> dict[str, list[str]]:
+    """``canonical stem -> [file node ids]``, read off each node's own source_file.
+
+    A file node is identified by its label being the basename of its source_file
+    (``player.gd`` in ``scenes/player/player.gd``); a symbol node inside that file
+    is labelled ``_ready()`` and is excluded. Absolute source_files are skipped -
+    they cannot be relativized here, and their stem would encode the on-disk
+    location rather than the repo path.
+
+    A stem can map to SEVERAL nodes when same-stem siblings collide (``player.gd``
+    + ``player.tscn``, ``foo.h`` + ``foo.c``); the caller breaks that tie.
+    """
+    from graphify.extractors.base import _file_stem  # local: avoid import cost at module load
+
+    index: dict[str, list[str]] = {}
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        nid, sf, label = node.get("id"), node.get("source_file"), node.get("label")
+        if not (isinstance(nid, str) and nid and sf and label):
+            continue
+        path = Path(str(sf))
+        if path.is_absolute() or path.name != str(label):
+            continue
+        stem = make_id(_file_stem(path))
+        if stem:
+            index.setdefault(stem, []).append(nid)
+    return index
+
+
+def _repeated_stem_remap(nodes: list, edges: list) -> dict[str, str]:
+    """Resolve edge endpoints that name a FILE but match no node.
+
+    The node-ID spec is ``{stem}_{entity}`` and only ever demonstrates it for a
+    SYMBOL, so a semantic extractor asked to reference a FILE has no example to
+    follow and appends the filename again: ``autoloads/network_manager.gd``
+    becomes ``autoloads_network_manager_network_manager`` where the node is
+    ``autoloads_network_manager``. Every such doc->code edge dangles.
+
+    Two resolution steps, both fold-on-hit - only endpoints matching NO node are
+    considered, so neither can invent an edge or rewrite a working one:
+
+    1. Strip a trailing segment that merely repeats the base's own tail. A
+       genuine symbol ``foo_bar`` in ``foo.py`` is never folded to ``foo``,
+       because ``bar`` is not a suffix of ``foo``.
+    2. Resolve what is left against :func:`_file_stem_index`, which is derived
+       from each node's own ``source_file`` rather than by guessing at strings.
+       This is what reaches a file whose id carries a collision salt: ``player.gd``
+       sits at ``scenes_player_player_gd_scenes_player_player`` because
+       ``player.tscn`` collides with it, so the plain ``scenes_player_player`` the
+       spec asks for exists nowhere and step 1 alone cannot land it.
+
+    When a stem is ambiguous (the very collision that made step 2 necessary) the
+    tie is broken by incident-edge count, then by id for determinism. That is a
+    HEURISTIC, not a derivation - the extraction carries nothing that says whether
+    a doc meant the script or the scene. It is safe because the candidates are the
+    same feature under two extensions, so a mis-pick points at ``player.tscn``
+    instead of ``player.gd``, never at an unrelated file, and only on an edge that
+    would otherwise be dropped.
+    """
+    ids = {
+        str(n["id"]) for n in nodes
+        if isinstance(n, dict) and isinstance(n.get("id"), str) and n["id"]
+    }
+    index = _file_stem_index(nodes)
+    degree: dict[str, int] = {}
+    for edge in edges:
+        if isinstance(edge, dict):
+            for key in ("source", "target"):
+                val = edge.get(key)
+                if isinstance(val, str) and val:
+                    degree[val] = degree.get(val, 0) + 1
+
+    def _resolve_stem(stem: str) -> str | None:
+        candidates = index.get(stem)
+        if not candidates:
+            return None
+        if len(candidates) == 1:
+            return candidates[0]
+        return max(candidates, key=lambda c: (degree.get(c, 0), c))
+
+    remap: dict[str, str] = {}
+    for edge in edges:
+        if not isinstance(edge, dict):
+            continue
+        for key in ("source", "target"):
+            val = edge.get(key)
+            if not isinstance(val, str) or not val or val in ids or val in remap:
+                continue
+            hit = _resolve_stem(val)          # already a bare file stem
+            if hit:
+                remap[val] = hit
+                continue
+            parts = val.split("_")
+            for i in range(1, len(parts)):
+                base = "_".join(parts[:i])
+                tail = "_".join(parts[i:])
+                if not (base == tail or base.endswith("_" + tail)):
+                    continue
+                if base in ids:
+                    remap[val] = base
+                    break
+                hit = _resolve_stem(base)
+                if hit:
+                    remap[val] = hit
+                    break
+    return remap
+
+
 def _doc_twin_remap(nodes: list) -> dict[str, str]:
     """Map a markdown quick-scan's bare doc node ``<slug>`` to the semantic
     ``<slug>_doc`` node for the SAME file (#1799).
@@ -669,6 +778,21 @@ def build_from_json(extraction: dict, *, directed: bool = False, root: str | Pat
         for he in extraction.get("hyperedges", []) or []:
             if isinstance(he, dict) and isinstance(he.get("nodes"), list):
                 he["nodes"] = [_doc_remap.get(n, n) for n in he["nodes"]]
+
+    # Fold endpoints that repeat a file's own name as the entity (see
+    # _repeated_stem_remap). Runs after the doc-twin merge so it sees the final
+    # node ids, and only rewrites edges - no node is added or removed.
+    _stem_remap = _repeated_stem_remap(extraction.get("nodes", []), extraction.get("edges", []))
+    if _stem_remap:
+        for edge in extraction.get("edges", []):
+            if not isinstance(edge, dict):
+                continue
+            for _key in ("source", "target"):
+                if edge.get(_key) in _stem_remap:
+                    edge[_key] = _stem_remap[edge[_key]]
+        for he in extraction.get("hyperedges", []) or []:
+            if isinstance(he, dict) and isinstance(he.get("nodes"), list):
+                he["nodes"] = [_stem_remap.get(n, n) for n in he["nodes"]]
 
     G: nx.Graph = nx.DiGraph() if directed else nx.Graph()
     for node in extraction.get("nodes", []):

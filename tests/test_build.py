@@ -1200,3 +1200,101 @@ def test_build_from_json_prunes_dangling_hyperedge_members(capsys):
     assert set(hes) == {"he_partial"}, "an all-dangling hyperedge must be dropped"
     assert hes["he_partial"]["nodes"] == ["alpha", "beta"]
     assert "he_all_ghost" in capsys.readouterr().err
+
+
+def test_repeated_stem_endpoint_folds_onto_the_file_node():
+    # The node-ID spec only demonstrates {stem}_{entity} for a SYMBOL, so a
+    # semantic extractor referencing a FILE repeats the filename as the entity.
+    # Fold it back onto the real file node instead of dangling.
+    ext = {
+        "nodes": [
+            {"id": "autoloads_network_manager", "label": "network_manager.gd",
+             "file_type": "code", "source_file": "autoloads/network_manager.gd"},
+            {"id": "docs_multiplayer_architecture", "label": "Multiplayer architecture",
+             "file_type": "document", "source_file": "docs/multiplayer-architecture.md"},
+        ],
+        "edges": [
+            {"source": "docs_multiplayer_architecture",
+             "target": "autoloads_network_manager_network_manager",
+             "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0},
+        ],
+    }
+    G = build_from_json(ext)
+    assert G.has_edge("docs_multiplayer_architecture", "autoloads_network_manager"), \
+        "repeated-stem endpoint should fold onto the existing file node"
+
+
+def test_repeated_stem_fold_never_invents_or_merges():
+    # base must exist AND the discarded tail must duplicate the base's own tail.
+    ext = {
+        "nodes": [
+            {"id": "foo", "label": "foo.py", "file_type": "code", "source_file": "foo.py"},
+            {"id": "foo_bar", "label": "bar()", "file_type": "code", "source_file": "foo.py"},
+        ],
+        "edges": [
+            # tail "baz" is not a suffix of "foo" -> left alone (dangles, honestly)
+            {"source": "foo", "target": "foo_baz", "relation": "calls",
+             "confidence": "EXTRACTED", "confidence_score": 1.0},
+            # a real symbol id must never be folded down to its file node
+            {"source": "foo", "target": "foo_bar", "relation": "calls",
+             "confidence": "EXTRACTED", "confidence_score": 1.0},
+        ],
+    }
+    G = build_from_json(ext)
+    assert G.has_edge("foo", "foo_bar"), "a genuine symbol edge must survive untouched"
+    assert not G.has_edge("foo", "foo"), "fold must not collapse a symbol into its file"
+
+
+def test_stem_endpoint_resolves_through_a_collision_salt():
+    # player.gd and player.tscn collapse to one canonical stem, so the collision
+    # pass salts them apart and the plain `scenes_player_player` the ID spec asks
+    # for exists nowhere. Resolve via each node's own source_file instead, and
+    # break the .gd/.tscn tie by incident-edge count (the script is far richer).
+    ext = {
+        "nodes": [
+            {"id": "scenes_player_player_gd_scenes_player_player", "label": "player.gd",
+             "file_type": "code", "source_file": "scenes/player/player.gd"},
+            {"id": "scenes_player_player_tscn_scenes_player_player", "label": "player.tscn",
+             "file_type": "code", "source_file": "scenes/player/player.tscn"},
+            {"id": "scenes_player_player_gd_ready", "label": "_ready()",
+             "file_type": "code", "source_file": "scenes/player/player.gd"},
+            {"id": "docs_player_physics_fsm", "label": "Player physics FSM",
+             "file_type": "document", "source_file": "docs/player-physics-fsm.md"},
+        ],
+        "edges": [
+            # give the .gd node more incident edges than the .tscn node
+            {"source": "scenes_player_player_gd_scenes_player_player",
+             "target": "scenes_player_player_gd_ready", "relation": "defines",
+             "confidence": "EXTRACTED", "confidence_score": 1.0},
+            # the doc names the file the way the spec asks for - matches no node
+            {"source": "docs_player_physics_fsm", "target": "scenes_player_player_player",
+             "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0},
+        ],
+    }
+    G = build_from_json(ext)
+    assert G.has_edge("docs_player_physics_fsm",
+                      "scenes_player_player_gd_scenes_player_player"), \
+        "doc reference should resolve through the collision salt to the script"
+
+
+def test_stem_resolution_ignores_symbol_nodes():
+    # Only nodes labelled with their file's basename are file nodes; a symbol
+    # must never be mistaken for one and absorb a file-level reference.
+    ext = {
+        "nodes": [
+            {"id": "pkg_mod_gd_pkg_mod", "label": "mod.gd",
+             "file_type": "code", "source_file": "pkg/mod.gd"},
+            {"id": "pkg_mod_helper", "label": "helper()",
+             "file_type": "code", "source_file": "pkg/mod.gd"},
+        ],
+        "edges": [
+            {"source": "pkg_mod_gd_pkg_mod", "target": "pkg_mod_mod",
+             "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0},
+        ],
+    }
+    G = build_from_json(ext)
+    assert not G.has_edge("pkg_mod_gd_pkg_mod", "pkg_mod_helper"), \
+        "a symbol node must not absorb a file-level reference"
+    # pkg_mod_mod resolves to the file node itself, which would be a self-loop;
+    # the point is only that it never lands on the symbol.
+    assert "pkg_mod_helper" not in {"pkg_mod_mod"} | set(G.neighbors("pkg_mod_gd_pkg_mod"))

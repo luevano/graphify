@@ -3,7 +3,10 @@ import textwrap
 import unittest
 from pathlib import Path
 
-from graphify.extract import extract, extract_godot_resource, _make_id, _file_stem
+from graphify.extract import (
+    extract, extract_godot_resource, _make_id, _file_stem, _file_node_id,
+)
+from graphify.extractors.gdscript import extract_gdscript
 from graphify.extractors import godot_resource as gs
 
 
@@ -71,6 +74,43 @@ class TestGodotFileIdentity(unittest.TestCase):
             for e in _edges(r, rel):
                 self.assertIn(e["target"], node_ids,
                               f"{rel} edge target {e['target']} matches no node")
+
+    def test_file_node_id_is_the_canonical_stem(self):
+        """The extractor's file node must carry core's id, not one of its own.
+
+        Encoding the extension (``_make_id(str(path))``) minted
+        ``scripts_shared_gd`` alongside the canonical ``scripts_shared`` that
+        ``_file_node_id`` - and every semantic extractor following the node-ID
+        spec - produces, so a doc->code edge and the AST landed on different
+        nodes for the same file. An absolute input must still remap to the
+        repo-relative form (#502); the extension-less id is the file node's own
+        id rather than a symbol prefix, so the remap has to match it exactly.
+        """
+        (self.root / "scripts").mkdir()
+        (self.root / "project.godot").write_text(
+            'config_version=5\n\n[autoload]\nShared="*res://scripts/shared.gd"\n'
+        )
+        (self.root / "scripts" / "shared.gd").write_text(
+            "extends Node\nfunc ping():\n\tpass\n"
+        )
+        script = self.root / "scripts" / "shared.gd"
+        # The extractor's own contract, asserted directly: whatever path form it
+        # is handed, the file node id is that path's canonical stem. Asserting
+        # this through extract() cannot fail, because the remap registers the
+        # extension-ful ABSOLUTE form explicitly and repairs it either way.
+        self.assertEqual(extract_gdscript(script)["nodes"][0]["id"],
+                         _file_node_id(script))
+        self.assertEqual(
+            extract_godot_resource(self.root / "project.godot")["nodes"][0]["id"],
+            _file_node_id(self.root / "project.godot"))
+
+        files = [self.root / "project.godot", script]
+        r = extract(files, cache_root=self.root)
+        self.assertEqual(self._ids_for(r, "shared.gd"),
+                         {_file_node_id(Path("scripts") / "shared.gd")})
+        anchor = _make_id(str(self.root))
+        leaked = [n["id"] for n in r["nodes"] if anchor in n["id"]]
+        self.assertEqual(leaked, [], f"on-disk path leaked into ids: {leaked[:3]}")
 
     def test_same_stem_scene_and_script_do_not_dangle(self):
         """`back_button.tscn` + `back_button.gd` is the Godot norm, not an edge case.
@@ -176,8 +216,8 @@ class TestGodotResource(unittest.TestCase):
         """)
         r = extract_godot_resource(p)
 
-        enemy_gd = _make_id(str(self.root / "scripts" / "enemy.gd"))
-        bullet = _make_id(str(self.root / "scenes" / "Bullet.tscn"))
+        enemy_gd = _make_id(_file_stem(self.root / "scripts" / "enemy.gd"))
+        bullet = _make_id(_file_stem(self.root / "scenes" / "Bullet.tscn"))
 
         attaches = {e["target"] for e in _edges(r, "attaches_script")}
         self.assertIn(enemy_gd, attaches)
@@ -207,7 +247,7 @@ class TestGodotResource(unittest.TestCase):
         self.assertTrue(_edges(r, "autoload"), "no autoload edge emitted")
         self.assertTrue(_edges(r, "main_scene"), "no main_scene edge emitted")
 
-        gstate = _make_id(str(self.root / "scripts" / "game_state.gd"))
+        gstate = _make_id(_file_stem(self.root / "scripts" / "game_state.gd"))
         script_targets = {e["target"] for e in _edges(r, "script")}
         self.assertIn(gstate, script_targets)
 
@@ -283,7 +323,7 @@ class TestGodotResourceGrammar(unittest.TestCase):
             script = ExtResource("1_e")
         """)
         r = extract_godot_resource(scene)
-        enemy_gd = _make_id(str(self.root / "scripts" / "enemy.gd"))
+        enemy_gd = _make_id(_file_stem(self.root / "scripts" / "enemy.gd"))
         attaches = {e["target"] for e in _edges(r, "attaches_script")}
         self.assertIn(enemy_gd, attaches)
 

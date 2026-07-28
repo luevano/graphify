@@ -263,7 +263,15 @@ def extract_gdscript(path: Path) -> dict:
         return {"error": f"cannot read {path}"}
 
     stem = _file_stem(path)
-    file_nid = _make_id(str(path))
+    # File-level ids use the SAME canonical stem as the symbol ids below, which is
+    # core's `_file_node_id` contract: every path segment, extension dropped.
+    # Encoding the extension here (`_make_id(str(path))`) minted a second identity
+    # for each file - `autoloads_event_bus_gd` beside the canonical
+    # `autoloads_event_bus` - so a doc edge, a cross-file stub and the file's own
+    # node could each land on a different one. foo.gd/foo.tscn now collide by
+    # design; resolution.py's collision salt separates that pair, which is what it
+    # exists for.
+    file_nid = _make_id(stem)
     nodes: list[dict] = [{
         "id": file_nid, "label": path.name, "file_type": "code",
         "source_file": str(path), "source_location": None,
@@ -360,7 +368,7 @@ def extract_gdscript(path: Path) -> dict:
             # into a god node the way an engine *method* does, and "which
             # scripts are CharacterBody3D vs Control" is real structure.
             if res is not None:
-                tgt = _make_id(str(res))
+                tgt = _make_id(_file_stem(res))
                 add_node(tgt, res.name, source_file=str(res))
                 add_edge(owner_nid, tgt, "extends", _loc(ext), target_file=str(res))
             else:
@@ -395,7 +403,7 @@ def extract_gdscript(path: Path) -> dict:
                 if a.type == "string":
                     res = _resolve_res(_strip_quotes(_txt(a, raw)), path)
                     if res is not None:
-                        tgt = _make_id(str(res))
+                        tgt = _make_id(_file_stem(res))
                         add_node(tgt, res.name, source_file=str(res))
                         add_edge(file_nid, tgt, "imports", _loc(call_node),
                                  context="preload", target_file=str(res))

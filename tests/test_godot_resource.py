@@ -330,3 +330,45 @@ class TestGodotResourceGrammar(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestGodotFixtureProject(unittest.TestCase):
+    """End-to-end over the vendored mini-project (see fixtures/godot/README.md).
+
+    A whole Godot project in miniature: project.godot registering an autoload and
+    a main scene, a .tscn attaching a script and instancing another scene. Both
+    Godot id bugs needed exactly this shape - several files naming each other -
+    so a single-file test cannot reach them.
+    """
+
+    root = Path(__file__).parent / "fixtures" / "godot" / "resource"
+
+    def test_each_file_is_one_canonically_named_node(self):
+        files = sorted(p for p in self.root.rglob("*")
+                       if p.suffix in (".gd", ".tscn", ".godot"))
+        self.assertTrue(files, "fixture project is missing")
+        r = extract(files, cache_root=self.root)
+
+        # ids are canonical against the SCAN root, which for a repo-relative
+        # fixture path is the repo itself - not the fixture subdirectory.
+        repo = Path(__file__).resolve().parents[1]
+        for p in files:
+            ids = {n["id"] for n in r["nodes"] if n.get("label") == p.name}
+            rel = p.resolve().relative_to(repo)
+            self.assertEqual(
+                ids, {_file_node_id(rel)},
+                f"{rel} should be exactly one node named {_file_node_id(rel)}, got {sorted(ids)}")
+
+    def test_every_cross_file_edge_lands_on_a_node(self):
+        files = sorted(p for p in self.root.rglob("*")
+                       if p.suffix in (".gd", ".tscn", ".godot"))
+        r = extract(files, cache_root=self.root)
+        node_ids = {n["id"] for n in r["nodes"]}
+
+        seen = 0
+        for rel in ("attaches_script", "instances", "main_scene", "script"):
+            for e in _edges(r, rel):
+                seen += 1
+                self.assertIn(e["target"], node_ids,
+                              f"{rel} edge target {e['target']} matches no node")
+        self.assertGreater(seen, 0, "fixture project produced no cross-file edges")

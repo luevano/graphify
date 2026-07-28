@@ -242,7 +242,9 @@ def extract_godot_resource(path: Path) -> dict:
 
 def _build_scene(path: Path, blocks: list[_Block]) -> dict:
     root = _project_root(path)
-    file_nid = _make_id(str(path))
+    # Canonical extension-less stem, matching core's `_file_node_id` and the
+    # gdscript extractor - see the note at gdscript.py's `file_nid`.
+    file_nid = _make_id(_file_stem(path))
     nodes: list[dict] = [{
         "id": file_nid, "label": path.name, "file_type": "code",
         "source_file": str(path), "source_location": None,
@@ -303,7 +305,7 @@ def _build_scene(path: Path, blocks: list[_Block]) -> dict:
             resolved = _resolve_res(rpath, root)
             ext_resources[rid] = {"type": rtype, "path": rpath, "resolved": resolved}
             if resolved is not None:
-                tgt = _make_id(str(resolved))
+                tgt = _make_id(_file_stem(resolved))
                 add_node(tgt, resolved.name, source_file=str(resolved))
                 if rpath.endswith(".gd") or rtype == "Script":
                     add_edge(file_nid, tgt, "attaches_script", loc, target_file=str(resolved))
@@ -332,7 +334,7 @@ def _build_scene(path: Path, blocks: list[_Block]) -> dict:
                 info = ext_resources.get(cm.group(1))
                 if info and info.get("resolved") is not None:
                     resolved = info["resolved"]
-                    tgt = _make_id(str(resolved))
+                    tgt = _make_id(_file_stem(resolved))
                     add_node(tgt, resolved.name, source_file=str(resolved))
                     add_edge(file_nid, tgt, "attaches_script", ploc,
                              context=node_path, target_file=str(resolved))
@@ -371,7 +373,9 @@ def _build_scene(path: Path, blocks: list[_Block]) -> dict:
 
 def _build_project(path: Path, blocks: list[_Block]) -> dict:
     root = path.parent
-    file_nid = _make_id(str(path))
+    # Canonical extension-less stem, matching core's `_file_node_id` and the
+    # gdscript extractor - see the note at gdscript.py's `file_nid`.
+    file_nid = _make_id(_file_stem(path))
     nodes: list[dict] = [{
         "id": file_nid, "label": "project.godot", "file_type": "code",
         "source_file": str(path), "source_location": None,
@@ -426,13 +430,13 @@ def _build_project(path: Path, blocks: list[_Block]) -> dict:
                 add_node(gid, key + " (autoload)", loc)
                 add_edge(file_nid, gid, "autoload", loc)
                 if resolved is not None:
-                    tgt = _make_id(str(resolved))
+                    tgt = _make_id(_file_stem(resolved))
                     add_node(tgt, resolved.name, source_file=str(resolved))
                     add_edge(gid, tgt, "script", loc, target_file=str(resolved))
             elif key == "run/main_scene":
                 resolved = _resolve_res(val.strip().strip('"'), root)
                 if resolved is not None:
-                    tgt = _make_id(str(resolved))
+                    tgt = _make_id(_file_stem(resolved))
                     add_node(tgt, resolved.name, source_file=str(resolved))
                     add_edge(file_nid, tgt, "main_scene", loc, target_file=str(resolved))
 

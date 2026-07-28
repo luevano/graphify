@@ -4781,6 +4781,16 @@ def extract(
         old_pref = _file_node_id(path)
         if old_pref != new_id:
             old_prefs.append((old_pref, new_id))
+        # An extractor that mints its file node with the CANONICAL stem (every
+        # segment, no extension - see extractors/gdscript.py) produces exactly
+        # `old_pref` when handed an absolute path. That is the file node's own
+        # id, not a symbol prefix, so prefix decomposition below never sees it
+        # and the on-disk location would persist into graph.json. The two
+        # `_make_id(str(...))` forms above only cover an extractor that keeps the
+        # extension, where the `_gd` tail made the id look like a symbol.
+        for _pref in (old_pref, _file_node_id(path.resolve())):
+            if _pref != new_id:
+                id_remap.setdefault(_pref, new_id)
         old_pref_abs = _file_node_id(path.resolve())
         if old_pref_abs != new_id and old_pref_abs != old_pref:
             old_prefs.append((old_pref_abs, new_id))

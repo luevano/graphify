@@ -906,6 +906,61 @@ def _doc_twin_remap(nodes: list) -> dict[str, str]:
     return remap
 
 
+def _file_ref_node_remap(nodes: list) -> dict[str, str]:
+    """Fold a semantic node that IS a reference to a file onto that file's real
+    node, when the file's own id carries a same-stem collision salt.
+
+    The node-ID spec tells a semantic extractor to name a file by its bare stem
+    (``game/main/main.gd`` -> ``game_main_main``). That is right until a sibling
+    of the same stem exists: ``main.gd`` next to ``main.tscn`` collide, so
+    extract() salts BOTH with their extension and the real script node is
+    ``game_main_main_gd_game_main_main``. The bare stem the spec asks for then
+    belongs to no file, and the doc's citation becomes a *node* of its own —
+    ``file_type: code`` but ``source_file`` pointing at the .md — so the code
+    file and every doc citing it end up as two disconnected nodes.
+
+    This is the node-level twin of :func:`_repeated_stem_remap`, which cannot
+    reach the case: that pass only rewrites endpoints matching NO node, and here
+    the ghost exists as a node, so the endpoint resolves — to the wrong thing.
+
+    Resolution is derivational, not a heuristic: the ghost is folded only onto
+    the candidate whose own ``source_file`` is the file the ghost's LABEL names
+    (as a path or as a basename). ``main.gd`` therefore lands on ``main.gd`` and
+    never on ``main.tscn``, which is exactly the ambiguity the incident-edge
+    tie-break in :func:`_repeated_stem_remap` can only guess at. When the label
+    names no candidate, or names more than one, nothing is folded.
+
+    AST-tier nodes are skipped — their ids are canonical by construction, and the
+    salt itself is an AST decision that must keep working.
+    """
+    index = _file_stem_index(nodes)
+    if not index:
+        return {}
+    sf_by_id: dict[str, str] = {}
+    for n in nodes:
+        if isinstance(n, dict) and isinstance(n.get("id"), str) and n.get("source_file"):
+            sf_by_id[n["id"]] = str(n["source_file"]).replace("\\", "/").lstrip("./")
+
+    remap: dict[str, str] = {}
+    for node in nodes:
+        if not isinstance(node, dict) or _is_ast_tier(node):
+            continue
+        nid, label = node.get("id"), node.get("label")
+        if not (isinstance(nid, str) and nid and isinstance(label, str) and label):
+            continue
+        candidates = [c for c in index.get(nid, ()) if c != nid]
+        if not candidates:
+            continue  # the bare stem IS the file node (no salt) — nothing to fold
+        want = label.replace("\\", "/").lstrip("./")
+        hits = [
+            c for c in candidates
+            if sf_by_id.get(c) == want or Path(sf_by_id.get(c, "")).name == want
+        ]
+        if len(hits) == 1:
+            remap[nid] = hits[0]
+    return remap
+
+
 def build_from_json(extraction: dict, *, directed: bool = False, root: str | Path | None = None) -> nx.Graph:
     """Build a NetworkX graph from an extraction dict.
 
@@ -1037,6 +1092,12 @@ def build_from_json(extraction: dict, *, directed: bool = False, root: str | Pat
     # for the same file, so a document is one node regardless of which pipeline
     # touched it last (#1799).
     _doc_remap = _doc_twin_remap(extraction.get("nodes", []))
+    # Same shape of repair (drop the duplicate node, rewrite its endpoints), so
+    # it rides the block below rather than duplicating it: a doc's citation of a
+    # collision-salted file folds onto the real file node instead of standing up
+    # a code-typed ghost attributed to the .md (see _file_ref_node_remap).
+    for _k, _v in _file_ref_node_remap(extraction.get("nodes", [])).items():
+        _doc_remap.setdefault(_k, _v)
     if _doc_remap:
         extraction["nodes"] = [
             n for n in extraction.get("nodes", [])

@@ -1642,6 +1642,59 @@ def test_stem_endpoint_resolves_through_a_collision_salt():
         "doc reference should resolve through the collision salt to the script"
 
 
+def _salted_pair_with_doc_ref(ref_label):
+    """main.gd + main.tscn (so both ids carry the collision salt) plus a doc that
+    cites one of them by the bare stem the node-ID spec asks for — which, salted,
+    belongs to no file, so the citation stands up a code-typed node of its own."""
+    return {
+        "nodes": [
+            {"id": "game_main_main_gd_game_main_main", "label": "main.gd",
+             "file_type": "code", "source_file": "game/main/main.gd",
+             "source_location": "L1"},
+            {"id": "game_main_main_tscn_game_main_main", "label": "main.tscn",
+             "file_type": "code", "source_file": "game/main/main.tscn",
+             "source_location": "L1"},
+            {"id": "docs_maps", "label": "Maps", "file_type": "document",
+             "source_file": "docs/maps.md", "source_location": None},
+            # the ghost: typed code, but sourced to the .md that cited it
+            {"id": "game_main_main", "label": ref_label, "file_type": "code",
+             "source_file": "docs/maps.md", "source_location": None},
+        ],
+        "edges": [
+            {"source": "docs_maps", "target": "game_main_main",
+             "relation": "references", "confidence": "EXTRACTED",
+             "confidence_score": 1.0},
+        ],
+    }
+
+
+def test_doc_reference_to_a_salted_file_folds_onto_the_real_file_node():
+    G = build_from_json(_salted_pair_with_doc_ref("game/main/main.gd"))
+    assert not G.has_node("game_main_main"),         "the doc's bare-stem citation must not survive as a code-typed ghost"
+    assert G.has_edge("docs_maps", "game_main_main_gd_game_main_main"),         "the citation should land on the script it names"
+    # the .gd/.tscn collision fix itself must keep working
+    assert G.has_node("game_main_main_tscn_game_main_main")
+
+
+def test_doc_reference_folds_by_label_not_by_edge_count():
+    """The label names the file, so resolution is derivational — a doc naming
+    the SCENE lands on the scene even though the script has more edges."""
+    ext = _salted_pair_with_doc_ref("main.tscn")
+    ext["edges"].append(
+        {"source": "game_main_main_gd_game_main_main",
+         "target": "game_main_main_tscn_game_main_main", "relation": "defines",
+         "confidence": "EXTRACTED", "confidence_score": 1.0})
+    G = build_from_json(ext)
+    assert G.has_edge("docs_maps", "game_main_main_tscn_game_main_main")
+
+
+def test_doc_reference_naming_no_candidate_is_left_alone():
+    """Fold only on a label that actually names one of the same-stem files;
+    anything else stays put rather than being guessed onto a neighbour."""
+    G = build_from_json(_salted_pair_with_doc_ref("Main scene wiring"))
+    assert G.has_node("game_main_main"), "an unrecognised label must not be folded"
+
+
 def test_stem_resolution_ignores_symbol_nodes():
     # Only nodes labelled with their file's basename are file nodes; a symbol
     # must never be mistaken for one and absorb a file-level reference.

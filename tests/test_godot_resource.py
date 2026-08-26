@@ -349,9 +349,9 @@ class TestGodotFixtureProject(unittest.TestCase):
         self.assertTrue(files, "fixture project is missing")
         r = extract(files, cache_root=self.root)
 
-        # ids are canonical against the SCAN root, which for a repo-relative
-        # fixture path is the repo itself - not the fixture subdirectory.
-        repo = Path(__file__).resolve().parents[1]
+        # ids are canonical against the SCAN root - the cache_root extract()
+        # was handed, i.e. the fixture project dir, not the repo.
+        repo = self.root.resolve()
         for p in files:
             ids = {n["id"] for n in r["nodes"] if n.get("label") == p.name}
             rel = p.resolve().relative_to(repo)

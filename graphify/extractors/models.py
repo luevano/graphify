@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 
 _WORKSPACE_PACKAGE_CACHE: dict[str, dict[str, Path]] = {}
 
-_JS_CACHE_BYPASS_SUFFIXES = {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".vue", ".svelte"}
+_JS_CACHE_BYPASS_SUFFIXES = {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".vue", ".svelte", ".ejs"}
 
 @dataclass
 class LanguageConfig:
@@ -85,12 +85,18 @@ class _SymbolExportFact:
     local_name: str | None = None
     target_path: Path | None = None
     target_name: str | None = None
+    # `export type { X } from ...`: erased at compile time, so the re-export
+    # edge it produces is stamped type_only and excluded from Import Cycles
+    # (#3123). The fact itself still participates in symbol resolution - a
+    # type import resolved through a type-only barrel is itself type-only.
+    type_only: bool = False
 
 @dataclass(frozen=True)
 class _StarExportFact:
     file_path: Path
     target_path: Path
     line: int
+    type_only: bool = False
 
 @dataclass(frozen=True)
 class _NamespaceExportFact:
@@ -98,6 +104,7 @@ class _NamespaceExportFact:
     exported_name: str
     target_path: Path
     line: int
+    type_only: bool = False
 
 @dataclass(frozen=True)
 class _SymbolUseFact:

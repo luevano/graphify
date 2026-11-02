@@ -29,6 +29,29 @@ def test_report_contains_corpus_check():
     report = generate(G, communities, cohesion, labels, gods, surprises, detection, tokens, "./project")
     assert "## Corpus Check" in report
 
+
+def test_report_surfaces_unclassified_files():
+    """#3511: detect() already tracks files it saw but could not classify
+    (no supported extension), but nothing surfaced them -- a corpus that is
+    mostly an unsupported language got the same "well covered" verdict as
+    one that was actually extracted."""
+    G, communities, cohesion, labels, gods, surprises, detection, tokens = make_inputs()
+    detection = {
+        **detection,
+        "unclassified": ["Main.lean", "Util.lean", "a.toml", "b.toml", "c.toml", "readme"],
+    }
+    report = generate(G, communities, cohesion, labels, gods, surprises, detection, tokens, "./project")
+    assert "Unclassified: 6 file(s)" in report
+    assert ".lean 2" in report
+    assert ".toml 3" in report
+
+
+def test_report_omits_unclassified_line_when_none():
+    """Backward compatible: no unclassified files, no new line."""
+    G, communities, cohesion, labels, gods, surprises, detection, tokens = make_inputs()
+    report = generate(G, communities, cohesion, labels, gods, surprises, detection, tokens, "./project")
+    assert "Unclassified:" not in report
+
 def test_report_contains_god_nodes():
     G, communities, cohesion, labels, gods, surprises, detection, tokens = make_inputs()
     report = generate(G, communities, cohesion, labels, gods, surprises, detection, tokens, "./project")
@@ -61,6 +84,30 @@ def test_report_shows_raw_cohesion_scores():
     assert "Cohesion:" in report
     assert "✓" not in report
     assert "⚠" not in report
+
+
+def test_report_header_does_not_embed_host_absolute_path():
+    """#2628 / #2598: the header must not bake the generator host absolute path
+    into GRAPH_REPORT.md — it labels with the project directory basename so the
+    same graph produces the same bytes on any machine."""
+    G, communities, cohesion, labels, gods, surprises, detection, tokens = make_inputs()
+    report = generate(G, communities, cohesion, labels, gods, surprises, detection,
+                      tokens, "/Users/mike/dev/apps/secretproj")
+    header = report.splitlines()[0]
+    assert "/Users/mike" not in header
+    assert "secretproj" in header
+
+
+def test_portable_root_label():
+    from graphify.report import _portable_root_label
+    # Absolute paths collapse to the basename on both POSIX and Windows.
+    assert _portable_root_label("/Users/mike/dev/apps/proj") == "proj"
+    assert _portable_root_label(r"C:\Users\mike\dev\proj") == "proj"
+    # A trailing slash still yields the directory name, not an empty label.
+    assert _portable_root_label("/Users/mike/dev/proj/") == "proj"
+    # Relative names pass through unchanged.
+    assert _portable_root_label("./project") == "project"
+    assert _portable_root_label("project") == "project"
 
 
 # --- work-memory lessons section ----------------------------------------------
@@ -154,3 +201,36 @@ def test_report_hubs_use_wikilinks_when_obsidian():
     labels = {cid: f"Widget {cid}" for cid in communities}
     report = generate(G, communities, cohesion, labels, gods, surprises, detection, tokens, "./project", min_community_size=1, obsidian=True)
     assert "[[_COMMUNITY_" in report
+
+
+def test_report_hub_wikilink_matches_the_exported_filename_stem():
+    # The wikilink target must be exactly what export._obsidian_safe_stem
+    # would name the real _COMMUNITY_*.md note for the same label, or the
+    # link dangles once --obsidian actually writes the vault. A hub label
+    # that happens to look like a source file (a plausible fallback name,
+    # since communities can be named after their highest-degree member)
+    # used to keep its ".qmd" suffix here while the export dropped it.
+    from graphify.export import _obsidian_safe_stem
+    G, communities, cohesion, labels, gods, surprises, detection, tokens = make_inputs()
+    cid = next(iter(communities))
+    labels = dict(labels)
+    labels[cid] = "report.qmd"
+    report = generate(G, communities, cohesion, labels, gods, surprises, detection, tokens, "./project", min_community_size=1, obsidian=True)
+    expected = _obsidian_safe_stem("report.qmd")
+    assert expected == "report"
+    assert f"[[_COMMUNITY_{expected}|report.qmd]]" in report
+    assert "[[_COMMUNITY_report.qmd|" not in report
+
+
+def test_report_hub_wikilink_falls_back_to_unnamed_for_punctuation_only_label():
+    # export._obsidian_safe_stem refuses to name a note after a label with no
+    # word characters at all, falling back to "unnamed" instead of writing a
+    # filename like "@.md". The wikilink must point at that same fallback.
+    from graphify.export import _obsidian_safe_stem
+    G, communities, cohesion, labels, gods, surprises, detection, tokens = make_inputs()
+    cid = next(iter(communities))
+    labels = dict(labels)
+    labels[cid] = "@@@"
+    report = generate(G, communities, cohesion, labels, gods, surprises, detection, tokens, "./project", min_community_size=1, obsidian=True)
+    assert _obsidian_safe_stem("@@@") == "unnamed"
+    assert "[[_COMMUNITY_unnamed|@@@]]" in report

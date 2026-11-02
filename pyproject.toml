@@ -137,17 +137,17 @@ commonlisp = ["tree-sitter-commonlisp"]
 robot = ["robotframework>=4.0"]
 vbnet = ["tree-sitter-vb-dotnet==0.3.0"]
 # No standalone tree-sitter-r / tree-sitter-erlang wheel exists on PyPI; the
-# language pack bundles both grammars in a prebuilt, offline-compatible wheel.
+# language pack provides both grammars, on the same pin as the godot extra.
 # Optional extras (large shared dep, resolved once in `all`).
-r = ["tree-sitter-language-pack==0.11.0"]
-erlang = ["tree-sitter-language-pack==0.11.0"]
+r = ["tree-sitter-language-pack==1.23.1"]
+erlang = ["tree-sitter-language-pack==1.23.1"]
 solidity = ["tree-sitter-solidity==1.2.13"]
-# Godot (Engine) extraction. No standalone GDScript wheel is on PyPI, so `.gd`
-# uses the `gdscript` grammar from the language pack, on the same pin as r/erlang
-# since `all` can only resolve one version. Pack 0.11.0 has no `godot_resource`
-# grammar, so `.tscn`/`.tres`/`project.godot` use the dependency-free line parser.
-godot = ["tree-sitter-language-pack==0.11.0"]
-all = ["mcp>=1,<3", "starlette>=1.3.1,<2", "anyio>=4.14.2", "neo4j", "falkordb", "pypdf>=6.19.0", "markdownify", "watchdog", "graspologic; python_version < '3.13'", "graspologic-native>=1.3.1,<2; python_version >= '3.13'", "python-docx", "openpyxl", "psycopg[binary]", "faster-whisper; python_version >= '3.11'", "av>=11,<19; python_version >= '3.11'", "yt-dlp>=2026.7.4", "matplotlib", "pillow>=13.0.0; python_version >= '3.11'", "pillow>=12.3.0; python_version < '3.11'", "numpy>=2.0; python_version >= '3.13'", "openai", "tiktoken", "boto3", "anthropic", "tree-sitter-sql", "jieba; python_version < '3.12'", "jieba-py>=0.46.12,<1; python_version >= '3.12'", "tree-sitter-dm>=0.25,<0.26", "tree-sitter-hcl", "tree-sitter-pascal", "tree-sitter-ocaml", "tree-sitter-commonlisp", "robotframework>=4.0", "tree-sitter-vb-dotnet==0.3.0", "tree-sitter-language-pack==0.11.0", "tree-sitter-solidity==1.2.13"]
+# Godot (Engine) extraction. No standalone GDScript wheel is on PyPI, so `.gd` and
+# `.tscn`/`.tres`/`project.godot` use the `gdscript` and `godot_resource` grammars
+# from the language pack. Fork-only: upstream pins 0.11.0, which has no
+# `godot_resource`. Pack 1.x downloads each grammar on first use, then caches it.
+godot = ["tree-sitter-language-pack==1.23.1"]
+all = ["mcp>=1,<3", "starlette>=1.3.1,<2", "anyio>=4.14.2", "neo4j", "falkordb", "pypdf>=6.19.0", "markdownify", "watchdog", "graspologic; python_version < '3.13'", "graspologic-native>=1.3.1,<2; python_version >= '3.13'", "python-docx", "openpyxl", "psycopg[binary]", "faster-whisper; python_version >= '3.11'", "av>=11,<19; python_version >= '3.11'", "yt-dlp>=2026.7.4", "matplotlib", "pillow>=13.0.0; python_version >= '3.11'", "pillow>=12.3.0; python_version < '3.11'", "numpy>=2.0; python_version >= '3.13'", "openai", "tiktoken", "boto3", "anthropic", "tree-sitter-sql", "jieba; python_version < '3.12'", "jieba-py>=0.46.12,<1; python_version >= '3.12'", "tree-sitter-dm>=0.25,<0.26", "tree-sitter-hcl", "tree-sitter-pascal", "tree-sitter-ocaml", "tree-sitter-commonlisp", "robotframework>=4.0", "tree-sitter-vb-dotnet==0.3.0", "tree-sitter-language-pack==1.23.1", "tree-sitter-solidity==1.2.13"]
 
 [project.scripts]
 graphify = "graphify.__main__:main"

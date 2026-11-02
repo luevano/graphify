@@ -304,14 +304,19 @@ def extract_erlang(path: Path) -> dict:
                 args = node.child_by_field_name("args")
                 if callee_node is not None and args is not None:
                     arity = len(args.named_children)
-                    if callee_node.type == "atom":
+                    # Pack 1.x parses `m:f(x)` as remote(remote_module, call(f, x)).
+                    outer = node.parent if node.parent is not None and node.parent.type == "remote" else None
+                    if callee_node.type == "atom" and outer is None:
                         name = _atom(_read_text(callee_node, source))
                         target = functions.get((name, arity))
                         if target is not None:
                             add_edge(caller_id, target, "calls", node)
-                    elif callee_node.type == "remote":
-                        written = _read_text(callee_node, source)
-                        module, separator, name = written.partition(":")
+                    elif callee_node.type == "remote" or outer is not None:
+                        if outer is not None:
+                            module, separator = _read_text(outer, source).partition(":")[:2]
+                            name = _read_text(callee_node, source)
+                        else:
+                            module, separator, name = _read_text(callee_node, source).partition(":")
                         if separator:
                             raw_calls.append({
                                 "caller_nid": caller_id,

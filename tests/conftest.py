@@ -1,10 +1,20 @@
 from __future__ import annotations
 
+import os
 import tempfile
 from pathlib import Path
 from typing import Any
 
 import pytest
+
+# Language pack 1.x caches grammars under LOCALAPPDATA/HOME, which the throwaway
+# home fixture redirects. Pin the real cache so tests don't lose their grammars.
+try:
+    from tree_sitter_language_pack import cache_dir as _pack_cache_dir
+
+    os.environ.setdefault("TREE_SITTER_LANGUAGE_PACK_CACHE_DIR", _pack_cache_dir())
+except ImportError:
+    pass
 
 
 @pytest.fixture(scope="session")
